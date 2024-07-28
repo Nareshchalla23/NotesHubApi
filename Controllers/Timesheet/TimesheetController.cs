@@ -43,7 +43,7 @@ namespace NotesHubApi.Controllers.Timesheet
                 if (!await ValidateTimesheetRelationsAsync(timesheetDto))
                     return BadRequest("Invalid Task, Project, or LoginId.");
 
-                var timesheet = _mapper.Map<Timesheet>(timesheetDto);
+                var timesheet = _mapper.Map<Models.Timesheet>(timesheetDto);
                 timesheet.TimesheetId = Guid.NewGuid();
                 timesheet.CreatedAt = DateTime.UtcNow;
                 timesheet.LastModifiedAt = timesheet.CreatedAt;
@@ -329,7 +329,7 @@ namespace NotesHubApi.Controllers.Timesheet
                    await _dbContext.Jwtlogins.AnyAsync(j => j.LoginId == loginId);
         }
 
-        private async System.Threading.Tasks.Task NotifyTimesheetChangeAsync(string rabbitMqTopic, string signalREvent, Timesheet timesheet)
+        private async System.Threading.Tasks.Task NotifyTimesheetChangeAsync(string rabbitMqTopic, string signalREvent, Models.Timesheet timesheet)
         {
             var timesheetDto = _mapper.Map<TimesheetDTO.Timesheet>(timesheet);
             var json = JsonSerializer.Serialize(timesheetDto, new JsonSerializerOptions
