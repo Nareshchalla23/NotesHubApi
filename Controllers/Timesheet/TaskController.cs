@@ -10,7 +10,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Text.Json;
 
-namespace NotesHubApi.Controllers
+namespace NotesHubApi.Controllers.Timesheet
 {
     [ApiController]
     [Route("api/[controller]")]

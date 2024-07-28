@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace NotesHubApi.Controllers
+namespace NotesHubApi.Controllers.Timesheet
 {
     [ApiController]
     [Route("api/[controller]")]
@@ -156,6 +156,111 @@ namespace NotesHubApi.Controllers
                 return HandleException(ex, "deleting", "TimesheetDeletionFailed");
             }
         }
+        [HttpPatch("{id}/description")]
+        public async Task<IActionResult> UpdateTimesheetDescription(Guid id, [FromBody] TimesheetDTO.TimesheetDescriptionPatchDTO patchDto)
+        {
+            if (patchDto == null || string.IsNullOrEmpty(patchDto.Description))
+            {
+                _logger.LogWarning("Patch data is null or description is empty for TimesheetId: {TimesheetId}", id);
+                return BadRequest("Patch data is null or description is empty.");
+            }
+
+            try
+            {
+                var timesheet = await _dbContext.Timesheets.FindAsync(id);
+                if (timesheet == null)
+                {
+                    _logger.LogWarning("Timesheet with ID '{TimesheetId}' not found.", id);
+                    return NotFound($"Timesheet with ID '{id}' not found.");
+                }
+
+                timesheet.Description = patchDto.Description;
+                timesheet.LastModifiedAt = DateTime.UtcNow;
+
+                await _dbContext.SaveChangesAsync();
+
+                // Publish update event to RabbitMQ
+                _rabbitMQService.PublishMessage("timesheet_events", new { Event = "TimesheetDescriptionUpdated", timesheet.TimesheetId, Timestamp = DateTime.UtcNow });
+
+                // Notify clients via SignalR
+                await _signalRService.NotifyClientsAsync("TimesheetDescriptionUpdated", new { timesheet.TimesheetId, Timestamp = DateTime.UtcNow });
+
+                return Ok(_mapper.Map<TimesheetDTO.Timesheet>(timesheet));
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error occurred while updating description for TimesheetId: {TimesheetId}", id);
+                await _signalRService.NotifyClientsAsync("TimesheetDescriptionUpdateFailed", new { TimesheetId = id, Error = "Database error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(500, "A database error occurred while updating the description. Please try again later.");
+            }
+            catch (TimeoutException timeoutEx)
+            {
+                _logger.LogError(timeoutEx, "Timeout error occurred while updating description for TimesheetId: {TimesheetId}", id);
+                await _signalRService.NotifyClientsAsync("TimesheetDescriptionUpdateFailed", new { TimesheetId = id, Error = "Timeout error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(504, "A timeout error occurred while updating the description. Please try again later.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An unexpected error occurred while updating description for TimesheetId: {TimesheetId}", id);
+                await _signalRService.NotifyClientsAsync("TimesheetDescriptionUpdateFailed", new { TimesheetId = id, Error = "An unexpected error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(500, "An unexpected error occurred while updating the description. Please try again later.");
+            }
+        }
+
+        [HttpGet("total-hours/{loginId}")]
+        public async Task<IActionResult> GetTotalHoursByLoginId(Guid loginId)
+        {
+            try
+            {
+                // Check if the loginId is valid
+                if (loginId == Guid.Empty)
+                {
+                    _logger.LogWarning("Invalid loginId provided: {LoginId}", loginId);
+                    return BadRequest("Invalid loginId.");
+                }
+
+                // Check if the user exists
+                var userExists = await _dbContext.Jwtlogins.AnyAsync(u => u.LoginId == loginId);
+                if (!userExists)
+                {
+                    _logger.LogWarning("No user found with loginId: {LoginId}", loginId);
+                    return NotFound($"No user found with loginId: {loginId}");
+                }
+
+                // Calculate total hours
+                var totalHours = await _dbContext.Timesheets
+                    .Where(t => t.LoginId == loginId)
+                    .SumAsync(t => t.HoursWorked);
+
+                // Publish total hours event to RabbitMQ
+                _rabbitMQService.PublishMessage("timesheet_events", new { Event = "TotalHoursCalculated", LoginId = loginId, TotalHours = totalHours, Timestamp = DateTime.UtcNow });
+
+                // Notify clients via SignalR
+                await _signalRService.NotifyClientsAsync("TotalHoursCalculated", new { LoginId = loginId, TotalHours = totalHours, Timestamp = DateTime.UtcNow });
+
+                return Ok(new { LoginId = loginId, TotalHours = totalHours });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error occurred while retrieving total hours for LoginId: {LoginId}", loginId);
+                await _signalRService.NotifyClientsAsync("TotalHoursCalculationFailed", new { LoginId = loginId, Error = "Database error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(500, "A database error occurred while retrieving the total hours. Please try again later.");
+            }
+            catch (TimeoutException timeoutEx)
+            {
+                _logger.LogError(timeoutEx, "Timeout error occurred while retrieving total hours for LoginId: {LoginId}", loginId);
+                await _signalRService.NotifyClientsAsync("TotalHoursCalculationFailed", new { LoginId = loginId, Error = "Timeout error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(504, "A timeout error occurred while retrieving the total hours. Please try again later.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An unexpected error occurred while retrieving total hours for LoginId: {LoginId}", loginId);
+                await _signalRService.NotifyClientsAsync("TotalHoursCalculationFailed", new { LoginId = loginId, Error = "An unexpected error occurred", Timestamp = DateTime.UtcNow });
+                return StatusCode(500, "An unexpected error occurred while retrieving the total hours. Please try again later.");
+            }
+        }
+
+
 
         [HttpPatch("{id}/hours")]
         public async Task<IActionResult> UpdateTimesheetHours(Guid id, [FromBody] TimesheetDTO.TimesheetPatchDTO patchDto)
@@ -169,22 +274,44 @@ namespace NotesHubApi.Controllers
                 if (timesheet == null)
                     return NotFound($"Timesheet with ID '{id}' not found.");
 
-                if (patchDto.HoursWorked <= 0 || patchDto.HoursWorked > 24)
-                    return BadRequest("HoursWorked must be greater than 0 and not exceed 24.");
+                if (!string.IsNullOrEmpty(patchDto.StartTime))
+                {
+                    timesheet.StartTime = ParseTimeSpan(patchDto.StartTime);
+                }
 
-                timesheet.HoursWorked = patchDto.HoursWorked;
+                if (!string.IsNullOrEmpty(patchDto.EndTime))
+                {
+                    timesheet.EndTime = ParseTimeSpan(patchDto.EndTime);
+                }
+
+                if (timesheet.StartTime.HasValue && timesheet.EndTime.HasValue)
+                {
+                    var duration = timesheet.EndTime.Value - timesheet.StartTime.Value;
+                    timesheet.HoursWorked = (decimal)duration.TotalHours;
+                }
+
                 timesheet.LastModifiedAt = DateTime.UtcNow;
 
                 await _dbContext.SaveChangesAsync();
-                await NotifyTimesheetChangeAsync("timesheet_hours_updated", "TimesheetHoursUpdated", timesheet);
+
+
+                _rabbitMQService.PublishMessage("timesheet_events", new { Event = "TimesheetHoursUpdated", timesheet.TimesheetId, Timestamp = DateTime.UtcNow });
+                await _signalRService.NotifyClientsAsync("TimesheetHoursUpdated", new { timesheet.TimesheetId, Timestamp = DateTime.UtcNow });
 
                 return Ok(_mapper.Map<TimesheetDTO.Timesheet>(timesheet));
             }
             catch (Exception ex)
             {
-                return HandleException(ex, "updating hours", "TimesheetHoursUpdateFailed");
+                _logger.LogError(ex, "An error occurred while updating hours for TimesheetId: {TimesheetId}", id);
+                return StatusCode(500, "An error occurred while updating the timesheet. Please try again later.");
             }
         }
+
+        private static TimeSpan? ParseTimeSpan(string time)
+        {
+            return TimeSpan.TryParse(time, out var result) ? result : null;
+        }
+
 
         private async Task<bool> ValidateTimesheetRelationsAsync(TimesheetDTO.Timesheet timesheetDto)
         {

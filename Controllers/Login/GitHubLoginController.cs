@@ -10,7 +10,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 
-namespace NotesHubApi.Controllers
+namespace NotesHubApi.Controllers.Login
 {
     [ApiController]
     [Route("api/[controller]")]

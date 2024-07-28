@@ -32,15 +32,19 @@
             public decimal HoursWorked { get; set; }
             public string Description { get; set; }
             public string Status { get; set; }
-            public string StartTime { get; set; } // Changed to string
-            public string EndTime { get; set; } // Changed to string
+            public string StartTime { get; set; }
+            public string EndTime { get; set; }
         }
 
         public class TimesheetPatchDTO
         {
-            public decimal HoursWorked { get; set; }
-            public string StartTime { get; set; } // Added
-            public string EndTime { get; set; } // Added
+            public string StartTime { get; set; }
+            public string EndTime { get; set; }
+        }
+
+        public class TimesheetDescriptionPatchDTO
+        {
+            public string Description { get; set; }
         }
     }
 }

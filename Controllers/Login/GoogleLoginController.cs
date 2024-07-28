@@ -11,7 +11,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Google.Apis.Auth;
 
-namespace NotesHubApi.Controllers
+namespace NotesHubApi.Controllers.Login
 {
     [ApiController]
     [Route("api/[controller]")]
